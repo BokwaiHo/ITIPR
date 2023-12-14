@@ -7,17 +7,18 @@ import torch
 from torch.utils.data import RandomSampler, DataLoader
 
 from .utils import accuracy, error   
+from helper.eval_metrics import precision_at_k, recall_at_k, mapk, ndcg_k
 
 device = ('cuda' if torch.cuda.is_available() else 'cpu')
-class DShap(object):
+class Triplet_Shap(object):
     
-    def __init__(self, model, train_dataset, test_dataset,
+    def __init__(self, model, sampler, val_user_list,
                  directory=None, seed=10):
         """
         Args:
             model: Torch model
-            train_dataset: Training Dataset (torch.Dataset)
-            test_dataset: Test Dataset (torch.Dataset)
+            sampler: BPR Triplet Sampler
+            val_user_list: Validation User List
             directory: Directory to save results and figures.
             seed: Random seed. When running parallel monte-carlo samples,
                 we initialize each with a different seed to prevent getting 
@@ -33,8 +34,8 @@ class DShap(object):
                 os.makedirs(directory)  
 
         self.model = model
-        self.train_set = train_dataset
-        self.test_set = test_dataset
+        self.sampler = sampler
+        self.val_user_list = val_user_list
         self.train_len = len(self.train_set)
 
         self.mem_tmc = np.zeros((0, self.train_len))
@@ -184,3 +185,14 @@ class DShap(object):
 
         self.tol = np.std(scores)
         self.mean_score = np.mean(scores)
+        
+    def compute_metrics(self, test_set, pred_list, topk=20):
+        """Computes recommendation performance on validation set."""
+        precision, recall, MAP, ndcg = [], [], [], []
+        for k in [5, 10, 15, 20]:
+            precision.append(precision_at_k(test_set, pred_list, k))
+            recall.append(recall_at_k(test_set, pred_list, k))
+            MAP.append(mapk(test_set, pred_list, k))
+            ndcg.append(ndcg_k(test_set, pred_list, k))
+
+        return precision, recall, MAP, ndcg

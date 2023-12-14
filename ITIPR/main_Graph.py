@@ -10,6 +10,7 @@ from helper import read_data_LIST, read_data_del_csv
 from argparse import ArgumentParser
 from model.Graph import NGCF, Controller
 from helper.eval_metrics import precision_at_k, recall_at_k, mapk, ndcg_k
+from approximaton import Triplet_Shap
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('matplotlib.font_manager').disabled = True
@@ -247,6 +248,7 @@ def train_model(args):
     weight_optimizer = torch.optim.Adam(controller.parameters(), lr=args.lr2, weight_decay=args.wd2)
 
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
+    triplet_shapley = Triplet_Shap(model, sampler, val_user_list)
     num_batches = train_matrix.count_nonzero() // args.batch_size
     print("num_batches:", num_batches)
 
