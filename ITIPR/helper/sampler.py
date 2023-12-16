@@ -26,10 +26,10 @@ def sample_function(train_matrix, pre_samples, batch_size, num_neg, result_queue
 
         batch_index = np.arange(batch_size)
         neg_samples = user_neg_items[batch_user_id]
-        ind = np.random.randint(user_neg_items.shape[1], size=(batch_size, num_neg))
+        ind = np.random.randint(user_neg_items.shape[1], size=(batch_size, unm_neg))
         neg_samples = neg_samples[batch_index[:, None], ind]
 
-        return batch_user_id, batch_item_id, neg_samples
+        return batch_user_id, batch_item_id, neg_samples, ind
 
     # np.random.seed(SEED)
     user_item_pairs = np.asarray(train_matrix.todok().nonzero()).T
@@ -45,6 +45,8 @@ def sample_function(train_matrix, pre_samples, batch_size, num_neg, result_queue
 class NegSampler(object):
     def __init__(self, train_matrix, pre_samples, batch_size=512, num_neg=3, n_workers=1):
         self.result_queue = Queue(maxsize=n_workers * 20)
+        self.train_matrix = train_matrix
+        self.pre_samples = pre_samples
         self.processors = []
         for i in range(n_workers):
             self.processors.append(

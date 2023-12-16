@@ -248,7 +248,8 @@ def train_model(args):
     weight_optimizer = torch.optim.Adam(controller.parameters(), lr=args.lr2, weight_decay=args.wd2)
 
     sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg, n_workers=4)
-    triplet_shapley = Triplet_Shap(model, sampler, val_user_list)
+    triplet_shapley = Triplet_Shap(model, sampler, val_user_list).run()
+    triplet_shapley = torch.tensor(triplet_shapley).reshape(train_matrix.shape[0], train_matrix.shape[1], user_neg_items.shape[1])
     num_batches = train_matrix.count_nonzero() // args.batch_size
     print("num_batches:", num_batches)
 
@@ -274,9 +275,11 @@ def train_model(args):
                 user, pos, neg = batch_user_id, batch_item_id, np.squeeze(neg_samples)
 
                 if args.bl == 'N' or check_iter_condition == False:
+                    batch_triplet_shapley = triplet_shapley[user, pos, ind]
+
                     user_emb, pos_emb, neg_emb = model.forward_unify(user, pos, neg)
 
-                    batch_loss = model.bpr_loss(user_emb, pos_emb, neg_emb)
+                    batch_loss = batch_triplet_shapley * model.bpr_loss(user_emb, pos_emb, neg_emb)
                     batch_loss = torch.sum(batch_loss)
 
                     model_optimizer.zero_grad()
@@ -387,6 +390,8 @@ def train_model(args):
                 pre_samples = {'user_neg_items': user_neg_items}
                 sampler = NegSampler(train_matrix, pre_samples, batch_size=args.batch_size, num_neg=args.n_neg,
                                      n_workers=4)
+                triplet_shapley = Triplet_Shap(model, sampler, val_user_list).run()
+                triplet_shapley = torch.tensor(triplet_shapley).reshape(train_matrix.shape[0], train_matrix.shape[1], user_neg_items.shape[1])
 
         sampler.close()
     except KeyboardInterrupt:

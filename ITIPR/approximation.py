@@ -35,13 +35,17 @@ class Triplet_Shap(object):
 
         self.model = model
         self.sampler = sampler
-        self.val_user_list = val_user_list
-        self.train_len = len(self.train_set)
+        self.user_pos_item_pairs = np.asarray(self.sampler.train_matrix.todok().nonzero()).T
+        self.neg_items_per_pair = np.asarray(self.sampler.pre_samples['user_neg_items'])
+        self.triplets = np.concatenate([np.repeat(self.user_pos_item_pairs[:, np.newaxis, :], self.neg_items_per_pair.shape[1], axis=1).reshape(self.user_pos_item_pairs.shape[0]*self.neg_items_per_pair.shape[1],-1), \
+            self.neg_items_per_pair[self.user_pos_item_pairs[:, 0]].reshape(-1,1)], axis=1)
+        self.val_user_list = np.concatenate([np.arange(0, len(val_user_list)).reshape(-1, 1), val_user_list], axis=1)
+        self.train_len = self.user_pos_item_pairs.shape[0]*self.neg_items_per_pair.shape[1]
 
         self.mem_tmc = np.zeros((0, self.train_len))
         self.idxs_tmc = np.zeros((0, self.train_len), int)
-        test_classes = torch.tensor([label for _, label in self.test_set])
-        self.random_score = torch.max(torch.bincount(test_classes) / len(self.test_set) ).item()
+        actual_items_matrix = torch.tensor([actual_items for _, actual_items in self.val_user_list])
+        self.random_score = torch.max(torch.bincount(actual_items_matrix) / len(self.val_user_list) ).item()
 
         self.tmc_number = self._which_parallel(self.directory)
         self._create_results_placeholder(self.directory, self.tmc_number)
@@ -75,6 +79,7 @@ class Triplet_Shap(object):
                 )
                 self.vals_tmc = np.mean(self.mem_tmc, 0)
             self.save_results()
+        return self.vals_tmc
         
         
     def save_results(self):
@@ -136,23 +141,25 @@ class Triplet_Shap(object):
         truncation_counter = 0
         new_score = self.random_score
         self.model.train()
+        pred_list = self.generate_pred_list(self.model, self.sampler.train_matrix, topk=20)
 
         #  Iterates through the entire Training dataset
-        data_list = []
-        label_list = []
+        user_list = []
+        pos_item_list = []
         for i, idx in enumerate(idxs):
             old_score = new_score
-            data_list.append(self.train_set[idx][0])
-            label_list.append(torch.tensor(self.train_set[idx][1]))
+            user_list.append(self.triplets[idx][0])
+            pos_items_list.append(torch.tensor(self.sampler.train_matrix[self.triplets[idx][0]]))
             if i == 0:
-                data = self.train_set[idx][0].unsqueeze(0)
-                labels = torch.tensor([self.train_set[idx][1]])
+                user = self.triplets[idx][0].unsqueeze(0)
+                pos_items_list = torch.tensor([self.sampler.train_matrix[self.triplets[idx][0]]])
             else:
-                data = torch.stack(data_list, 0)
-                labels = torch.stack(label_list, 0)
+                user = torch.stack(user_list, 0)
+                pos_items = torch.stack(pos_items_list, 0)
 
-            data, labels = data.to(device), labels.to(device)
-            new_score = accuracy(self.model(data), labels)
+            user, pos_items = user.to(device), pos_items.to(device)
+            precision, recall, MAP, ndcg = self.compute_metrics(pos_items, pred_list[user], topk=20)
+            new_score = recall
 
             marginal_contribs[idx] = (new_score - old_score)  # original code divides by 1 for some reason
             distance_to_full_score = np.abs(new_score - self.mean_score)
@@ -170,17 +177,18 @@ class Triplet_Shap(object):
         """Computes the average performance and its error using bagging."""
         scores = []
         self.model.eval()
+        pred_list = self.generate_pred_list(self.model, self.sampler.train_matrix, topk=20)
         for _ in range(100):
-            #bag_idxs = np.random.choice(len(self.y_test), len(self.y_test))  # check size
+            #bag_idxs = np.random.choice(len(self.actual_item_matrix), len(self.actual_item_matrix))  # check size
             
-            sampler = RandomSampler(self.test_set)
-            loader = DataLoader(self.test_set, batch_size=512, num_workers=2, sampler=sampler)
+            sampler = RandomSampler(self.val_user_list)
+            loader = DataLoader(self.val_user_list, batch_size=512, num_workers=2, sampler=sampler)
 
             # 1-pass
-            for data, labels in loader:
-                data, labels = data.to(device), labels.to(device)
-                acc = accuracy(self.model(data), labels)
-                scores.append(acc)
+            for user, actual_items in loader:
+                user, actual_items = user.to(device), actual_items.to(device)
+                precision, recall, MAP, ndcg = self.compute_metrics(actual_items, pred_list[user], topk=20)
+                scores.append(recall)
                 break
 
         self.tol = np.std(scores)
@@ -196,3 +204,41 @@ class Triplet_Shap(object):
             ndcg.append(ndcg_k(test_set, pred_list, k))
 
         return precision, recall, MAP, ndcg
+        
+    def generate_pred_list(self, model, train_matrix, topk=20):
+        num_users = train_matrix.shape[0]
+        batch_size = 1024
+        num_batches = int(num_users / batch_size) + 1
+        user_indexes = np.arange(num_users)
+        pred_list = None
+
+        for batchID in range(num_batches):
+            start = batchID * batch_size
+            end = start + batch_size
+
+            if batchID == num_batches - 1:
+                if start < num_users:
+                    end = num_users
+                else:
+                    break
+
+            batch_user_index = user_indexes[start:end]
+            batch_user_ids = torch.from_numpy(np.array(batch_user_index)).type(torch.LongTensor).to(args.device)
+
+            rating_pred = model.predict(batch_user_ids)
+            rating_pred = rating_pred.cpu().data.numpy().copy()
+            rating_pred[train_matrix[batch_user_index].toarray() > 0] = 0
+
+            # reference: https://stackoverflow.com/a/23734295, https://stackoverflow.com/a/20104162
+            ind = np.argpartition(rating_pred, -topk)
+            ind = ind[:, -topk:]
+            arr_ind = rating_pred[np.arange(len(rating_pred))[:, None], ind]
+            arr_ind_argsort = np.argsort(arr_ind)[np.arange(len(rating_pred)), ::-1]
+            batch_pred_list = ind[np.arange(len(rating_pred))[:, None], arr_ind_argsort]
+
+            if batchID == 0:
+                pred_list = batch_pred_list
+            else:
+                pred_list = np.append(pred_list, batch_pred_list, axis=0)
+
+        return pred_list
