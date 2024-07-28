@@ -1,2 +1,2 @@
 # ITIPR
-Code for paper 'Interpretable Triplet Importance for Personalized Ranking' in submission.
+Code for paper 'Interpretable Triplet Importance for Personalized Ranking' accepted by CIKM 2024.
